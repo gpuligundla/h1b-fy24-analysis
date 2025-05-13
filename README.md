@@ -1,6 +1,6 @@
 # H1B Analysis
 
-This project analyzes H1B visa data FY2024. To view the analysis access the H1b_Analysis.html file.
+This project analyzes H1B visa data FY2024 using R programming. To view the analysis access the H1b_Analysis.html file.
 
 ## Features
 - Data cleaning and preprocessing
