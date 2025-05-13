@@ -1,0 +1,250 @@
+---
+title: "H-1B Data Analysis Dashboard (FY24)"
+author: "Geethakrishna Puligundla"
+date: "04/29/2025"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    theme: journal
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(
+  echo = FALSE,       # Hide code chunks in the dashboard output
+  warning = FALSE,    # Suppress warnings
+  message = FALSE     # Suppress messages
+)
+
+library(flexdashboard) # For creating the dashboard layout
+library(shiny)         # For interactive elements (inputs, outputs)
+library(tidyverse)     # For data manipulation (dplyr, ggplot2, etc.)
+library(plotly)        # For interactive plots
+library(DT)            # For interactive tables
+library(scales)        # For formatting plot axes (e.g., comma)
+
+# Read raw data
+h1b_data_raw <- read.csv("Employer_Information_F24.csv")
+
+# Data Cleaning and Transformation Pipeline
+h1b_data <- h1b_data_raw %>%
+  # Select and rename relevant columns
+  select(
+    Employer_Name = Employer..Petitioner..Name,
+    Tax_ID = Tax.ID,
+    NACIS_CODE = Industry..NAICS..Code,
+    Petitioner_City = Petitioner.City,
+    Petitioner_State = Petitioner.State,
+    Petitioner_Zip = Petitioner.Zip.Code,
+    Initial_Approval = Initial.Approval,
+    Initial_Denial = Initial.Denial,
+    Continuing_Approval = Continuing.Approval,
+    Continuing_Denial = Continuing.Denial
+  ) %>%
+  
+  # Handle missing values and data types
+  mutate(
+    # Replace empty strings in Employer_Name with NA
+    Employer_Name = na_if(Employer_Name, ""),
+    Initial_Approval = coalesce(as.integer(Initial_Approval), 0L),
+    Initial_Denial = coalesce(as.integer(Initial_Denial), 0L),
+    Continuing_Approval = coalesce(as.integer(Continuing_Approval), 0L),
+    Continuing_Denial = coalesce(as.integer(Continuing_Denial), 0L)
+  ) %>%
+  
+  # Filter out rows with essential missing data or no activity
+  filter(
+    !is.na(Employer_Name),
+    !is.na(Tax_ID),
+    !is.na(Petitioner_Zip),
+    !(Initial_Approval == 0 & Initial_Denial == 0 &
+      Continuing_Approval == 0 & Continuing_Denial == 0)
+  ) %>%
+  
+  # Aggregate data by Employer_Name to handle potential duplicates
+  group_by(Employer_Name) %>%
+  summarize(
+    # Take the first non-missing value for identifiers within each group
+    Tax_ID = first(na.omit(Tax_ID)),
+    NACIS_CODE = first(na.omit(NACIS_CODE)),
+    Petitioner_City = first(na.omit(Petitioner_City)),
+    Petitioner_State = first(na.omit(Petitioner_State)),
+    Petitioner_Zip = first(na.omit(Petitioner_Zip)),
+  
+    Initial_Approval = sum(Initial_Approval, na.rm = TRUE),
+    Initial_Denial = sum(Initial_Denial, na.rm = TRUE),
+    Continuing_Approval = sum(Continuing_Approval, na.rm = TRUE),
+    Continuing_Denial = sum(Continuing_Denial, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  
+  # Create calculated fields for analysis and filtering
+  mutate(
+    Total_H1B = Initial_Approval + Initial_Denial + Continuing_Approval + Continuing_Denial,
+    Total_Lottery_H1B = Initial_Approval + Initial_Denial,
+    Total_Other = Continuing_Approval + Continuing_Denial
+  ) %>%
+  
+  # Filter out rows where Petitioner_State is NA, as it's used in the selector
+  filter(!is.na(Petitioner_State))
+
+```
+
+# Input Choices
+
+```{r}
+
+# Get unique states for the dropdown selector
+unique_states <- sort(unique(h1b_data$Petitioner_State))
+# Create named list for choices, including an "All States" option
+state_choices <- c("All States" = "All", unique_states)
+
+max_lottery_petitions <- max(1, h1b_data$Total_Lottery_H1B, na.rm = TRUE)
+
+```
+
+Column {.sidebar data-width=300}
+-----------------------------------------------------------------------
+
+### Controls
+
+This sidebar contains controls to filter the H-1B data displayed in the main panels.
+
+```{r inputs}
+# --- Input Widgets ---
+
+# Input 1: Dropdown for selecting Petitioner State
+selectInput(
+  inputId = "state_select",           # ID to reference this input in server logic
+  label = "Select State:",            # Label displayed above the dropdown
+  choices = state_choices,            # List of choices generated in setup
+  selected = "All"                    # Default selected value
+)
+
+# Input 2: Slider for filtering by minimum initial petitions
+sliderInput(
+  inputId = "min_lottery_h1b",        # ID to reference this input
+  label = "Minimum Initial Petitions:",# Label displayed above the slider
+  min = 0,                            # Minimum value of the slider
+  max = max_lottery_petitions,        # Maximum value (calculated in setup)
+  value = 1,                          # Default starting value
+  step = 1                            # Increment step size
+)
+
+```
+
+Column {data-width=700}
+-----------------------------------------------------------------------
+
+### Top Employers by Initial Petitions
+
+```{r top_employers_plot}
+# Create a reactive expression that filters the data based on user inputs
+filtered_data <- reactive({
+  data <- h1b_data
+
+  # Apply state filter if a specific state is selected
+  if (input$state_select != "All") {
+    data <- data %>% filter(Petitioner_State == input$state_select)
+  }
+
+  # Apply minimum initial petitions filter using the slider value
+  data <- data %>% filter(Total_Lottery_H1B >= input$min_lottery_h1b)
+
+  data
+})
+
+
+renderPlotly({
+
+  # Prepare data specifically for the plot (Top N employers)
+  plot_data <- filtered_data() %>%
+    arrange(desc(Total_Lottery_H1B)) %>%
+    head(10)
+
+  # Check if plot_data has any rows after filtering
+  validate(
+    need(nrow(plot_data) > 0, "No employers match the selected criteria.")
+  )
+
+  # Create the ggplot object
+  p <- ggplot(plot_data, aes(
+                x = reorder(Employer_Name, Total_Lottery_H1B),
+                y = Total_Lottery_H1B,
+                # Define custom hover text for plotly
+                text = paste("Employer:", Employer_Name,
+                             "<br>State:", Petitioner_State, # Added State info
+                             "<br>Initial Petitions:", Total_Lottery_H1B)
+              )) +
+    geom_col(fill = "steelblue", alpha = 0.8) + # Bar chart layer
+    coord_flip() + 
+    labs(
+      title = paste("Top 10 Employers by Initial Petitions",
+                    ifelse(input$state_select == "All", "(All States)", paste("in", input$state_select))),
+      subtitle = paste("Minimum Initial Petitions:", input$min_lottery_h1b),
+      x = "Employer Name",
+      y = "Number of Initial Petitions (Approved + Denied)"
+    ) +
+    scale_y_continuous(labels = scales::comma) +
+    theme_minimal(base_size = 11) + 
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          plot.subtitle = element_text(size = 10))
+
+  # Convert the ggplot object to an interactive plotly object
+  ggplotly(p, tooltip = "text") %>%
+    layout(title = list(text = paste("Top 10 Employers by Initial Petitions",
+                                      ifelse(input$state_select == "All", "(All States)", paste("in", input$state_select)),
+                                      '<br>',
+                                      '<sup>',paste("Minimum Initial Petitions:", input$min_lottery_h1b),'</sup>'),
+                      font = list(size = 14)))
+
+})
+
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### Filtered Employer Data Table
+
+```{r filtered_data_table}
+# Use renderDataTable to create an interactive table output
+renderDataTable({
+
+  # Access the reactive filtered data
+  data_for_table <- filtered_data() %>%
+    select(
+      Employer_Name,
+      Petitioner_State,
+      Petitioner_City,
+      Total_Lottery_H1B,
+      Initial_Approval,
+      Initial_Denial
+    ) %>%
+    arrange(desc(Total_Lottery_H1B))
+
+   validate(
+    need(nrow(data_for_table) > 0, "No data available for the selected filters.")
+  )
+
+  # Create the DataTable object
+  datatable(
+    data_for_table,
+    rownames = FALSE,           # Don't show row numbers
+    filter = 'top',             # Add column filters at the top
+    extensions = c('Buttons'), # Add extensions for extra features
+    options = list(
+      pageLength = 25,          # Default number of rows per page
+      scrollX = TRUE,           # Enable horizontal scrolling for wide tables
+      scroller = TRUE,           # Use Scroller extension for large tables (performance)
+      dom = 'Bfrtip'     
+    ),
+    caption = htmltools::tags$caption(
+      style = 'caption-side: top; text-align: left;', 
+      'Filtered H-1B Employer Data (FY2024)'
+    )
+  )
+})
+

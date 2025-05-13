@@ -1,0 +1,590 @@
+---
+title: "H-1B Data Analysis(FY24)"
+author: "Geethakrishna Puligundla"
+date: "2025-04-29"
+output:
+  html_document:
+    theme: journal
+    toc: true
+    toc_depth: 4
+    number_sections: true
+    toc_float: true
+    df_print: paged
+    code_download: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,       # hide code by default
+  warning = FALSE,    # suppress warnings
+  message = FALSE,    # suppress messages
+  fig.align = 'center', # centers the fig
+  fig.width = 7,
+  fig.height = 5,
+  dpi = 300,
+  out.width = '90%'
+)
+
+library(tidyverse)
+library(rstatix) # For get_summary_stats
+library(scales)  # For plot labels
+library(plotly)  # For interactive plots
+library(DT)      # For interactive tables
+library(knitr)   # For kable tables
+library(kableExtra) # For styling kable tables
+```
+
+```{css, echo=FALSE}
+p, li {
+  text-align: justify;
+}
+
+ p { margin-bottom: 1em; } */
+
+```
+
+# Abstract
+
+This study is about the H-1B visa petitions filed by employers during Fiscal Year 2024.This project mainly performs the descriptive statistics, exploratory data analysis, and statistical tests. The main focus will be on the areas of finding the Top statistics related to geographic locations, industries and validating the hypothesis of whether there is any relation between the company filings count and approvals. The key findings I found are primarily NACIS codes which is related to **Information Technology and software companies** ranks the highest in offering the H1B sponsored Job opportunities. Further analysis showed **a high concentration of petitioning employers in specific states, like California, Texas, New Jersey, New York, and Virginia**. A Chi-squared test demonstrated a **statistically significant association between the volume of initial petitions filed by an employer and their approval rate**, with employers filing more petitions ('Large Filers') experiencing higher approval rates than those filing fewer ('Small Filers'). Overall, the FY2024 data suggests that H-1B sponsorship is concentrated geographically and by industry, and that higher petition volume correlates with higher initial success rates.
+
+
+# Introduction
+
+![](h1b_pic.png)
+
+The H-1B visa program plays a significant role in the United States economy, it helps employers to temporarily employ foreign workers in specialized occupations. For many international students studying in the United States, securing post-graduation employment often involves the complex H-1B visa process, frequently as a transition from Optional Practical Training (OPT) or Curricular Practical Training (CPT). Understanding the trends of H-1B sponsorship is therefore vital for career planning and decision-making. This analysis mainly looks at identifying companies and industries most actively sponsoring H-1B visas in FY2024, finding the top geographic locations where H-1B opportunities are concentrated. Investigating this is crucial for international students because it helps identify potential employers willing to sponsor, highlights promising geographic areas for job searching, provides realistic salary expectations.
+
+To explore this, I taken the Fiscal year 2024 data set from the publicly available dataset at the [H1B Employer Datahub](https://www.uscis.gov/tools/reports-and-studies/h-1b-employer-data-hub)
+
+This data set contains the approval and denial records of H-1B visa applications. The counts of initial approval, initial denial, continuing approval, and continuing denial are aggregated by distinct completion fiscal year, two digit NAICS code, tax ID, state, city, and ZIP code.
+
+More Details at: [Understanding Our H-1B Employer Data Hub](https://www.uscis.gov/tools/reports-and-studies/h-1b-employer-data-hub/understanding-our-h-1b-employer-data-hub)
+
+# Data Management
+
+## Data Import
+
+Below represents the glimpse of raw data taken from the H1B Employer Hub
+
+```{r data-import}
+h1b_data <-  read.csv("Employer_Information_F24.csv")
+glimpse(h1b_data)
+```
+
+## Data Cleaning and Manipulation
+
+```{r data-cleaning, include=FALSE}
+
+# selecting necessary attributes and renaming
+h1b_data <- h1b_data %>%
+  select(
+    Employer_Name = Employer..Petitioner..Name,
+    Tax_ID = Tax.ID,
+    NACIS_CODE = Industry..NAICS..Code,
+    Petitioner_City = Petitioner.City,
+    Petitioner_State = Petitioner.State,
+    Petitioner_Zip = Petitioner.Zip.Code,
+    Initial_Approval = Initial.Approval,
+    Initial_Denial = Initial.Denial,
+    Continuing_Approval = Continuing.Approval,
+    Continuing_Denial = Continuing.Denial
+  )
+
+# removing the nulls
+h1b_data <- h1b_data %>%
+  mutate(
+    Employer_Name = na_if(Employer_Name, ""),
+    Initial_Approval = coalesce(as.integer(Initial_Approval), 0),
+    Initial_Denial = coalesce(as.integer(Initial_Denial), 0),
+    Continuing_Approval = coalesce(as.integer(Continuing_Approval), 0),
+    Continuing_Denial = coalesce(as.integer(Continuing_Denial), 0)
+)
+
+# filtering the valid records
+h1b_data <- h1b_data %>%
+  # Remove rows with missing Tax_ID or Employer_Name
+  filter(!is.na(Employer_Name), !is.na(Tax_ID), !is.na(Petitioner_Zip)) %>%
+  
+  # Remove rows where all approval/denial counts are 0
+  filter(!(Initial_Approval == 0 & Initial_Denial == 0 & 
+           Continuing_Approval == 0 & Continuing_Denial == 0))
+
+# grouping the duplicate records
+h1b_data <- h1b_data %>%
+  group_by(Employer_Name) %>%
+  summarize(
+    Tax_ID = first(na.omit(Tax_ID)),
+    NACIS_CODE = first(na.omit(NACIS_CODE)),
+    Petitioner_City = first(na.omit(Petitioner_City)),
+    Petitioner_State = first(na.omit(Petitioner_State)),
+    Petitioner_Zip = first(na.omit(Petitioner_Zip)),
+    Initial_Approval = sum(Initial_Approval),
+    Initial_Denial = sum(Initial_Denial),
+    Continuing_Approval = sum(Continuing_Approval),
+    Continuing_Denial = sum(Continuing_Denial),
+    .groups = 'drop'  # To ungroup after summarizing
+  )
+
+# adding new columns
+h1b_data <- h1b_data %>%
+  mutate(
+    Total_H1B = Initial_Approval + Initial_Denial + Continuing_Approval + Continuing_Denial,
+    Total_Lottery_H1B = Initial_Approval + Initial_Denial,
+    Total_Other = Continuing_Approval + Continuing_Denial
+  )
+
+
+glimpse(h1b_data)
+
+#write.csv(h1b_data, "cleaned_data.csv", row.names = FALSE)
+```
+
+
+I have performed following operations to clean the data and make it ready for the further analysis.
+
+- I simplified and renamed the columns to make them clearer using select(). 
+
+- I also replaced empty strings with NA and changed any NA values in the approval/denial columns to 0 using na_if() and coalesce().
+
+- I removed rows with missing Tax_ID or Employer_Name, and also removed rows where all the approval/denial values were zero.
+
+- I added new columns for the total H1Bs, new H1Bs, and renewal H1Bs using mutate().
+
+
+## Final Dataset
+
+```{r interactive-table, echo=FALSE, warning=FALSE}
+datatable(h1b_data, 
+          caption = "Final Cleaned H-1B Employer Data (FY2024)",
+          options =list(pageLength = 10, scrollX = TRUE, scrollY = 400, deferRender = TRUE, scroller = TRUE))
+```
+
+## Variable Definitions
+
+- **Employer_Name** – Name of the employer submitting the H1B petition.
+- **Tax_ID** – A unique tax identifier assigned to each employer.
+- **NACIS_CODE** – North American Industry Classification System code indicating the industry type.
+- **Petitioner_City** – The city where the petitioning employer is located.
+- **Petitioner_State** – The US state corresponding to the employer’s location.
+- **Petitioner_Zip** – ZIP code of the petitioning employer.
+- **Initial_Approval** – Number of new H1B visa petitions that were initially approved.
+- **Initial_Denial** – Number of new H1B visa petitions that were denied.
+- **Continuing_Approval** – Number of extensions or renewals approved for existing H1B visas.
+- **Continuing_Denial** – Number of continuing H1B petitions denied.
+- **Total_H1B** – The total number of H1B petitions submitted (new + renewals).
+- **Total_Lottery_H1B** – Total count of newly submitted H1B petitions.
+- **Total_Other** – Total count of H1B visa extensions or renewals submitted.
+
+## Key Terms
+- **H-1B Visa:** Employment visa for specialized foreign workers
+- **H1B Lottery:** The H-1B lottery is a random selection process USCIS uses when the number of applications for new H-1B work visas exceeds the 85,000 available visa slots. Being selected in this lottery is necessary before an employer can formally file the full H-1B petition for a cap-subject employee.
+- **Initial vs Continuing:** Initial applications stands for new applications whereas continuing applications contains cases when people change employers, any details etc
+- **Petitioner:** Employer sponsoring the visa application
+- **Tax_ID:** The Employer Identification Number (EIN), a unique identifier assigned by the IRS
+- **NACIS_CODE:** North American Industry Classification System code. This numeric code identifies the primary industry sector of the employer (e.g., Software Publishers, Computer Systems Design, Colleges/Universities).
+
+## Initial Exploratory Data Analysis
+
+### Numeric Variable Analysis
+
+#### center and spread of Numeric variables
+
+```{r}
+# Select only numeric variables
+num_vars <- h1b_data %>%
+  select(Initial_Approval, Initial_Denial, Continuing_Approval,
+         Continuing_Denial, Total_H1B, Total_Lottery_H1B, Total_Other)
+
+# Use get_summary_stats from rstatix
+summary_stats <- num_vars %>%
+  get_summary_stats(type = "full")
+
+summary_stats %>%
+  kable(caption = "Summary Statistics for Numeric Petition Counts") %>%
+  kable_styling(bootstrap_options = c("hover"), full_width = FALSE,  position = "center")
+```
+
+The median for most count variables is low, while the mean is significantly higher. The standard deviations and the IQR are large relative to the medians, further confirming the wide spread and skewness. So the summary statistics show H1B petition counts are strongly right-skewed with a wide spread. This means most employers file very few petitions, while a small number file extremely high volumes. These high-volume outliers appear genuine and represent significant H1B activity, so they should be retained in the analysis.
+
+
+#### Histogram for each numeric variable
+
+```{r, eda-histograms}
+
+numeric_cols <- c('Initial_Approval', 'Initial_Denial', 'Continuing_Approval',
+                  'Continuing_Denial', 'Total_H1B', 'Total_Lottery_H1B', 'Total_Other')
+
+h1b_numeric_long <- h1b_data %>%
+  select(all_of(numeric_cols)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Count")
+
+# Histograms with log1p scale
+ggplot(h1b_numeric_long, aes(x = Count + 1)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  # label_log() for log axes or simply label_number()
+  scale_x_log10(labels = scales::label_log(base = 10)) +
+  facet_wrap(~ Variable, scales = "free") + # Separate plot for each variable
+  labs(title = "Histograms of H1B Petition Counts per Employer (Log Scale)",
+       x = "Log10 Scale",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The histograms confirm the distributions are heavily right-skewed. Even on the log scale, we see most of the frequency concentrated towards the lower counts i.e In the summary if you observe for all categories the Mean is greater than Medians. Means most employers file very few H1B petitions but a smaller number of employers file a very large number of petitions, pulling the average up.The use of the log scale was essential to visualize this distribution.
+
+
+#### Boxplots for each numeric variable
+
+```{r, eda-boxplots}
+ggplot(h1b_numeric_long, aes(x = Variable, y = Count + 1)) +
+  geom_boxplot(fill = "lightgreen", outlier.shape = 21, outlier.size=1.5) +
+  scale_y_log10(labels = scales::label_log(base = 10)) + # Scale
+  coord_flip() +
+  labs(title = "Boxplots of H1B Petition Counts per Employer (Log Scale)",
+       x = "Petition Type",
+       y = "Log10 Scale") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1))
+```
+
+The main box (IQR) for each variable is compressed near the bottom, indicating that 50% of employers fall within a narrow range of low counts. There's a wide variation in H1B filing activity among employers. The numerous outliers represent employers with exceptionally high petition volumes compared to the typical filer. As discussed before, these are usually genuine (like large tech companies, consulting firms, universities) and represent a significant portion of the total H1B activity.
+
+### Categorical Variable Analysis
+
+#### Frequency table by state
+
+```{r, eda-freq-table-state}
+
+datatable(h1b_data %>%
+  count(Petitioner_State, sort = TRUE),
+          rownames = FALSE, filter = 'top',
+          options = list(pageLength = 10))
+```
+
+#### Frequency table by city
+
+```{r, eda-freq-table-city}
+
+datatable(h1b_data %>%
+  count(Petitioner_City, sort = TRUE),
+          rownames = FALSE, filter = 'top',
+          options = list(pageLength = 10))
+```
+
+#### Frequency table by Zipcode
+
+```{r, eda-freq-table-Zip}
+
+datatable(h1b_data %>%
+  count(Petitioner_Zip, sort = TRUE),
+          rownames = FALSE, filter = 'top',
+          options = list(pageLength = 10))
+```
+
+#### Frequency table by NACIS code
+
+```{r, eda-freq-table-nacis}
+datatable(h1b_data %>%
+  count(NACIS_CODE, sort = TRUE),
+          rownames = FALSE, filter = 'top',
+          options = list(pageLength = 10))
+```
+
+#### Petitioner State Map
+
+```{r eda-state-map, out.height="600px", out.width="100%"}
+
+# Calculate State Frequencies
+state_freq_simple <- h1b_data %>%
+  filter(!is.na(Petitioner_State)) %>%        # Exclude NA states
+  count(Petitioner_State, sort = TRUE, name = "Frequency") # Count by state abbreviation
+
+# Assuming Petitioner_State contains the 2-letter abbreviation
+state_freq_simple <- state_freq_simple %>%
+  mutate(HoverText = paste("State:", Petitioner_State, "<br>Employers:", Frequency))
+
+# Create Plotly Map
+
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = FALSE
+)
+
+fig_map_simple <- plot_ly(
+    data = state_freq_simple,      # Use the simple frequency table
+    type = 'choropleth',
+    locationmode = 'USA-states',   # Use built-in state boundaries
+    locations = ~Petitioner_State, # Column with state abbreviations
+    z = ~Frequency,                # Column with values for color
+    zmin = 0,                     # Optional: Set min value for color scale
+    zmax = max(state_freq_simple$Frequency, na.rm = TRUE) * 1.1,
+    text = ~HoverText,             # Column for hover text
+    hoverinfo = 'text',
+    colorscale = 'Greens',          # Color scheme
+    reversescale = TRUE, 
+    marker = list(line = list(color = toRGB("grey"), width=0.5)),
+    colorbar = list(title = "Number of Employers")
+  ) %>%
+  layout(
+    title = 'Number of H1B Petitioning Employers per State (FY2024)',
+    geo = g,
+    width = 800,
+    height = 600
+  )
+
+fig_map_simple
+```
+
+
+The above Map shows states with frequencies of H1B petitions
+
+
+#### Petitioner State Analysis
+
+```{r eda-state-bars}
+# Calculate frequency of top N states
+top_n_states <- 15
+state_freq <- h1b_data %>%
+  filter(!is.na(Petitioner_State)) %>% # Exclude NA states if any
+  count(Petitioner_State, sort = TRUE, name = "Frequency") %>%
+  head(top_n_states)
+
+# Bar chart of top N states
+ggplot(state_freq, aes(x = reorder(Petitioner_State, -Frequency), y = Frequency)) +
+  geom_col(fill = "coral") +
+  geom_text(aes(label=scales::comma(Frequency)), vjust=-0.5, size=3.5, color="black") + 
+  labs(title = paste("Top", top_n_states, "H1B Petitioner States (FY2024)"),
+       x = "Petitioner State",
+       y = "Number of Employers") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The bar chart show the states with the highest number of unique employers filing H1B petitions in FY2024. The states like California, Texas, New Jersey, New York, and Virginia appearing frequently.
+
+
+#### Petitioner Cities Analysis
+
+```{r eda-city-bars}
+top_n_cities <- 15
+city_freq <- h1b_data %>%
+  filter(!is.na(Petitioner_City)) %>% # Exclude NA cities if any
+  count(Petitioner_City, sort = TRUE, name = "Frequency") %>%
+  head(top_n_cities)
+
+# Bar chart of top N cities
+ggplot(city_freq, aes(x = reorder(Petitioner_City, -Frequency), y = Frequency)) +
+  geom_col(fill = "darkseagreen") +
+  geom_text(aes(label=scales::comma(Frequency)), vjust=-0.5, size=3.5, color="black") +
+  labs(title = paste("Top", top_n_cities, "H1B Petitioner Cities (FY2024)"),
+       x = "Petitioner City",
+       y = "Number of Employers") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Rotate labels
+  
+```  
+
+This analysis reveals the specific cities where the highest number of employers filing H1B petitions are located in New York, San Francisco, Houston, etc
+
+
+#### Petitioner Zipcode Analysis
+
+```{r eda-zip-bars}
+top_n_zip <- 15
+zip_freq <- h1b_data %>%
+  filter(!is.na(Petitioner_Zip)) %>% # Exclude NA zip codes if any
+  mutate(Petitioner_Zip = as.character(Petitioner_Zip)) %>%
+  count(Petitioner_Zip, sort = TRUE, name = "Frequency") %>%
+  head(top_n_zip)
+
+# Bar chart of top N zip codes
+ggplot(zip_freq, aes(x = reorder(Petitioner_Zip, -Frequency), y = Frequency)) +
+  geom_col(fill = "mediumpurple") +
+  geom_text(aes(label=scales::comma(Frequency)), vjust=-0.5, size=3.5, color="black") +
+  labs(title = paste("Top", top_n_zip, "H1B Petitioner Zip Codes (FY2024)"),
+       x = "Petitioner Zip Code",
+       y = "Number of Employers") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5))
+```  
+
+The top zip codes often points to specific corporate campuses, office parks, or university areas known for high concentrations of H1B employers. For example, you might see zip codes associated with major tech company headquarters or large consulting firm offices appearing frequently.
+
+
+#### NAICS codes Analysis
+
+```{r eda-naics-bars, fig.width=15, fig.height=10, out.width="100%"}
+# Calculate frequency of top N NAICS codes
+top_n_naics <- 15
+naics_freq <- h1b_data %>%
+  filter(!is.na(NACIS_CODE)) %>% # Exclude NA codes if any
+  # Ensure NACIS_CODE is treated as character/factor for counting
+  mutate(NACIS_CODE = as.character(NACIS_CODE)) %>%
+  count(NACIS_CODE, sort = TRUE, name = "Frequency") %>%
+  head(top_n_naics)
+
+# Bar chart of top N NAICS codes
+ggplot(naics_freq, aes(x = reorder(NACIS_CODE, Frequency), y = Frequency)) +
+  geom_col(fill = "steelblue") +
+  geom_text(
+    aes(label = scales::comma(Frequency)),
+    hjust=-0.1,
+    color = "black",
+    size = 3
+  ) +
+  coord_flip() +
+  labs(title = paste("Top 15 H1B Petitioner Industries (NAICS Codes, FY2024)"),
+       x = "NAICS Code",
+       y = "Number of Employers") +
+  theme_minimal()
+
+```
+
+The chart show the most frequent NAICS codes associated with employers filing H1B petitions. Codes related to IT services (like Custom Computer Programming Services - often 541511, Computer Systems Design Services - 541512), Software Publishing (511210), Management Consulting (541611), and potentially higher education or research often dominate. Also surprisingly there are lot of employers(it ranks on 7th position) who doesn't have the NAICS code or it is missing in the input raw data
+
+For more details related to NAICS code- https://www.census.gov/naics/
+
+
+# Analysis
+
+
+I am analyzing the H1B FY2024 data to check whether there is a statistically significant relation between the size of the petitioning company and the outcome of *initial* H1B petitions (Approval vs. Denial).
+
+Company size is not available in the data set so I'm assuming the **total number of initial H1B petitions filed** by each unique employer as an identifier to decide the company size. We will categorize employers based on whether they are above or below the median number of petitions filed and use a Chi-squared test of independence to compare approval rates between these groups.
+
+```{r analysis-prep, results='asis'}
+# Calculate the median number of initial petitions per employer
+median_petitions <- median(h1b_data$Total_Lottery_H1B, na.rm = TRUE)
+
+h1b_data <- h1b_data %>%
+      mutate(Size_Category = ifelse(Total_Lottery_H1B > median_petitions, "Large Filer", "Small Filer"))
+
+
+kable(table(h1b_data$Size_Category), caption = "Number of Employers per Size Category") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = FALSE, position = "center")
+
+size_comparison_data <- h1b_data %>%
+  group_by(Size_Category) %>%
+  summarise(
+    Total_Initial_Approved = sum(`Initial_Approval`, na.rm = TRUE),
+    Total_Initial_Denied = sum(`Initial_Denial`, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  mutate(Size_Category = factor(Size_Category, levels = c("Small Filer", "Large Filer"))) %>%
+  arrange(Size_Category)
+
+kable(size_comparison_data, caption = "Aggregated Counts for Chi-squared Test") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = FALSE, position = "center")
+```
+
+From the median, we got to know there are 13004 Large filers(Big Companies, universities etc) and 39771 smaller filers(Start ups, Newly entered into H1B's)
+
+
+## Chi-squared Test of Independence
+
+We perform the Chi-squared test to determine if there's a statistically significant association between the company size category and the initial petition outcome.
+
+**Hypotheses:**
+
+- **H₀:** The initial petition outcome (Approval/Denial) is independent of the company size category.
+- **H₁:** The initial petition outcome (Approval/Denial) is dependent on the company size category.
+
+
+**Assumptions:**
+
+- **Categorical Data:** `Size_Category` (Small/Large Filer) and `Outcome` (Approval/Denial).
+- **Independence of Observations:** Assumed for each petition.
+- **Expected Cell Counts:** All expected frequencies should be ≥ 5.
+
+
+```{r chi_squared_test}
+# Create the contingency table
+contingency_table <- size_comparison_data %>%
+  select(Total_Initial_Approved, Total_Initial_Denied) %>%
+  as.matrix()
+
+rownames(contingency_table) <- size_comparison_data$Size_Category
+
+# Perform the Chi-squared test
+# Using simulate.p.value = TRUE is safer if counts might be low in some cells
+
+chi_test_result <- chisq.test(contingency_table, simulate.p.value = TRUE, B = 5000)
+
+print(chi_test_result)
+print(chi_test_result$expected)
+
+assumption_met <- all(chi_test_result$expected >= 5)
+
+cat(paste("\nAssumption Check: Are all expected counts >= 5?", assumption_met, "\n"))
+```
+
+The Chi-squared test results based on the p-value and significance level (alpha=0.05).
+
+**Decision:** Since the p-value ( 2e-04 ) is less than alpha ( 0.05 ), we reject the null hypothesis (H₀).
+
+**Conclusion:** 
+
+There is a statistically significant association between the company size category (Small Filer vs. Large Filer, based on petition volume) and the initial H1B petition outcome (Approval/Denial) at the 5% significance level.
+
+The analysis suggests that the likelihood of an initial H1B petition being approved differs significantly between companies filing fewer petitions (<= 1, 'Small Filers') and those filing more ('> 1', 'Large Filers').
+
+This indicates that companies filing a larger volume of initial H1B petitions tend to have a higher approval rate compared to those filing fewer petitions.
+
+
+# Summary
+
+This project analyzed H-1B visa petition data for FY 2024 to understand current trends in employer sponsorship, focusing on identifying which types of companies and locations are most active and whether company size relates to petition success.
+
+**Key Findings:**
+
+- H-1B petitioning activity is more in specific states, with California, Texas, New Jersey, New York, and Virginia showing the highest number of unique employers filing petitions. Major metropolitan areas within these states are hotspots.
+
+- Industries related to Information Technology are overwhelmingly the most common sectors for employers filing H-1B petitions.
+
+- Our statistical analysis investigated whether the number of petitions a company files (used as an indicator of its size or H-1B activity level) is related to its success in getting initial petitions approved. We found Companies that filed a larger number of initial H-1B petitions (classified as 'Large Filers' based on filing more than the median number) generally had a higher initial approval rate compared to companies filing fewer petitions ('Small Filers').
+
+- This suggests that employers with higher H-1B petition volumes tend to experience greater success rates for their initial applications, although the difference in percentage points might be relatively small.
+
+**Limitations:**
+
+- A key limitation was using the number of petitions filed as a proxy for actual company size. While its related, this isn't a perfect measure. A company could file many petitions but still be relatively small, or vice-versa.
+
+- Employer Identification: Grouping data relied on employer names. Minor differences in how names were recorded could potentially split a single company into multiple entries, slightly affecting counts(EX: AMAZON DEVELOPMENT CENTER U S INC, AMAZON DATA SERVICES INC, AMAZON COM SERVICES LLC etc)
+
+- This analysis is a snapshot based on FY2024 data. It doesn't show trends over multiple years or provide reasons why petitions were approved or denied.
+
+**Next Steps:**
+
+- If possible, adding the company employee counts could provide a more accurate comparison based on company size.
+
+- Repeating the size vs. approval rate analysis within specific dominant industries (like IT) or states (like California) could reveal if this trend holds true across different segments.
+
+- Investigating if a similar relationship exists between company size/petition volume and the success rate of continuing (renewal) petitions.
+
+- using FY2024 as sample, we can do similar analysis on history of all Fiscal years data to get more findings.
+
+# References
+
+- https://www.uscis.gov/tools/reports-and-studies/h-1b-employer-data-hub
+- https://images.google.com/
+- https://www.census.gov/naics/
+- https://www.youtube.com/@statquest
+- https://www.youtube.com/watch?v=rulIUAN0U3w&t=260s
+
+
+# Personal Information
+
+![](gk_headshot.jpeg){width=240px height=240px}
+
+Geethakrishna Puligundla (GK) is graduating in May 2025 with Masters in Computer Science degree. He is a nerd guy likes to work with nuanced things. He likes to  go into rabbit hole(deep research) if he feels its exciting. Interested to work on the building new products/software to make it helpful for the society and strive for making the world a better place. Currently looking for a new opportunity to work on after graduation.
+
+His philosophy is to "Be curious! Solve hard problems"
+
+mail: pgeethakrishna@gmail.com
+
