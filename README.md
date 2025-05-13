@@ -1,6 +1,6 @@
 # H1B Analysis
 
-This project analyzes H1B visa data FY2024
+This project analyzes H1B visa data FY2024. To view the analysis access the H1b_Analysis.html file.
 
 ## Features
 - Data cleaning and preprocessing
@@ -8,4 +8,4 @@ This project analyzes H1B visa data FY2024
 - Statistical analysis of trends
 
 ## Shiny Dashboard
-Access the interactive app [here](https://gpuligundla.shinyapps.io/H1B_Analysis_Dashboard/)
+A simple interactive Dashboard [here](https://gpuligundla.shinyapps.io/H1B_Analysis_Dashboard/)
